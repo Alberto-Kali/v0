@@ -1,5 +1,5 @@
 from utill.giga_api import GigaAPI
-from utill.layers_api import Layer1, Layer2
+from utill.layers_api import Layer1, Layer2, Layer3
 from utill.db_api import LocationDatabase
 import json
 
@@ -78,8 +78,6 @@ history = [
 response = api.get_simple_answer(history)
 assistant_message = response['choices'][0]["message"]['content']
 
-
-
 # Парсим JSON в Python-объект
 data = json.loads(assistant_message)
 
@@ -92,5 +90,29 @@ for day_info in data:
     print(f"Общее расстояние: {day_info['total_distance_km']} км")
     print()
 
+print(db.find_places_from_names(data))
+
+
+
 #--------------Слой3
 
+layer3 = Layer3()
+
+# Выбор персонажа может быть основан на предпочтениях пользователя
+character_type = "local_enthusiast"  # или "historian", "adventure_guide", "friendly_guide"
+
+for day in days:
+    current_places_tags = [tag for place in day['route'] for tag in place.get('tags', [])]
+    similar_places = db.get_filtered_places(current_places_tags)
+        
+    while True:
+        prompt = create_daily_schedule_prompt(day, similar_places, character_type)
+        response = send_to_model(prompt)
+        print(response)
+            
+        user_input = input("Ваш ответ: ")
+            
+        if "chat next 1" in response.lower():
+            break
+            
+        prompt += f"\nПользователь: {user_input}\n"
