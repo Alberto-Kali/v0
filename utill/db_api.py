@@ -1,14 +1,22 @@
 import sqlite3
 import time
+import requests
 from tqdm import tqdm
 import openrouteservice
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 
 # Константы
-DATABASE_PATH = '../main.db'
+DATABASE_PATH = 'main.db'
 ORS_API_KEY = '5b3ce3597851110001cf6248b406c2a4df264cdfac696101870c473c'
-SLEEP_TIME = 1.5  # Увеличенное время задержки для избежания ошибок API
+SLEEP_TIME = 1.5
+
+TRANSPORT_MODES = {
+    'foot-walking': 'пешком',
+    'cycling-regular': 'велосипед',
+    'driving-car': 'автомобиль',
+    'driving-hgv': 'автобус'
+}
 
 class LocationDatabase:
     def __init__(self):
@@ -17,17 +25,6 @@ class LocationDatabase:
         
     def connect_db(self):
         return sqlite3.connect(DATABASE_PATH)
-
-    def calculate_route(self, point1, point2, profile="foot-walking"):
-        try:
-            cords = [point1, point2]
-            routes = self.client.directions(cords, profile=profile)
-            distance = routes['routes'][0]['summary']['distance'] / 1000
-            duration = routes['routes'][0]['summary']['duration'] / 60
-            return (distance, duration)
-        except Exception as e:
-            print(f"Route calculation error: {e}")
-            return None
 
     def update_coordinates(self):
         conn = self.connect_db()
@@ -63,77 +60,174 @@ class LocationDatabase:
                     places_to_delete.append(place_name)
                     continue
                 
-            # Удаление мест без координат
             for place_name in places_to_delete:
                 cursor.execute("DELETE FROM places WHERE name = ?", (place_name,))
                 conn.commit()
                 print(f"Deleted place: {place_name}")
-            
+        
             print(f"\nTotal places deleted: {len(places_to_delete)}")
             
         finally:
             conn.close()
 
-    def create_routes_matrix(self):
+    def create_routes_matrices(self):
         conn = self.connect_db()
         cursor = conn.cursor()
-        
+
         try:
-            # Создание таблицы
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS routes_matrix (
-                    from_point TEXT,
-                    to_point TEXT,
-                    distance REAL,
-                    duration REAL,
-                    PRIMARY KEY (from_point, to_point)
-                )
-            """)
-            
             cursor.execute("SELECT name, longitude, latitude FROM places")
             points = cursor.fetchall()
-            total_routes = len(points) * (len(points) - 1)
-            
-            print("Creating routes matrix...")
-            with tqdm(total=total_routes) as pbar:
-                for point1 in points:
-                    for point2 in points:
-                        if point1 != point2:
-                            try:
-                                # Проверка существующего маршрута
-                                cursor.execute("""
-                                    SELECT 1 FROM routes_matrix 
-                                    WHERE from_point = ? AND to_point = ?
-                                """, (point1[0], point2[0]))
-                                
-                                if not cursor.fetchone():
-                                    route = self.calculate_route(
-                                        (point1[1], point1[2]), 
-                                        (point2[1], point2[2])
-                                    )
-                                    
-                                    if route:
-                                        cursor.execute("""
-                                            INSERT INTO routes_matrix 
-                                            (from_point, to_point, distance, duration)
-                                            VALUES (?, ?, ?, ?)
-                                        """, (point1[0], point2[0], route[0], route[1]))
-                                        conn.commit()
-                                        time.sleep(SLEEP_TIME)
-                                
-                                pbar.update(1)
-                                
-                            except sqlite3.Error as e:
-                                print(f"Database error: {e}")
-                                continue
-                                
+
+            locations = [[float(point[1]), float(point[2])] for point in points]
+            names = [point[0] for point in points]
+
+            for profile, mode_name in TRANSPORT_MODES.items():
+                body = {
+                    "locations": locations,
+                    "metrics": ["distance", "duration"]
+                }
+                headers = {
+                    'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
+                    'Authorization': ORS_API_KEY,
+                    'Content-Type': 'application/json; charset=utf-8'
+                }
+
+                print(f"Requesting matrix data for {mode_name} from OpenRouteService...")
+                response = requests.post(
+                    f'https://api.openrouteservice.org/v2/matrix/{profile}', 
+                    json=body, 
+                    headers=headers
+                )
+
+                if response.status_code == 200:
+                    matrix_data = response.json()
+
+                    print(f"Updating routes matrix for {mode_name} in database...")
+                    total_routes = len(points) * (len(points) - 1)
+                    with tqdm(total=total_routes) as pbar:
+                        for i, from_point in enumerate(names):
+                            for j, to_point in enumerate(names):
+                                if i != j:
+                                    distance = matrix_data['distances'][i][j] / 1000
+                                    duration = matrix_data['durations'][i][j] / 60
+
+                                    cursor.execute(f"""
+                                        INSERT OR REPLACE INTO routes_matrix_{profile.replace('-', '_')}
+                                        (from_point, to_point, distance, duration)
+                                        VALUES (?, ?, ?, ?)
+                                    """, (from_point, to_point, distance, duration))
+
+                                    pbar.update(1)
+
+                    conn.commit()
+                    print(f"Routes matrix for {mode_name} updated successfully.")
+                else:
+                    print(f"Error in API request for {mode_name}: {response.status_code} - {response.reason}")
+                    print(response.text)
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
         finally:
             conn.close()
 
-def main():
-    db = LocationDatabase()
-    # db.update_coordinates()  # Раскомментируйте если нужно обновить координаты
-    db.create_routes_matrix()
+    def get_distance_matrices(self):
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        matrices = {}
 
-if __name__ == "__main__":
-    main()
+        try:
+            for profile in TRANSPORT_MODES.keys():
+                table_name = f"routes_matrix_{profile.replace('-', '_')}"
+                cursor.execute(f"""
+                    SELECT from_point, to_point, distance, duration 
+                    FROM {table_name}
+                """)
+                results = cursor.fetchall()
+                
+                matrix = {}
+                for row in results:
+                    from_point, to_point, distance, duration = row
+                    if from_point not in matrix:
+                        matrix[from_point] = {}
+                    matrix[from_point][to_point] = {"distance": distance, "duration": duration}
+                
+                matrices[profile] = matrix
+
+        except Exception as e:
+            print(f"An error occurred while fetching matrices: {e}")
+
+        finally:
+            conn.close()
+
+        return matrices
+    
+    def get_filtered_places(self, tags):
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        if not isinstance(tags, list):
+            raise TypeError("tags должен быть списком")
+
+        if not tags:
+            return []
+
+        query = """
+        SELECT DISTINCT name, description, photo_link
+        FROM places
+        WHERE tags LIKE ?
+        """
+        
+        results = set()
+        for tag in tags:
+            cursor.execute(query, (f"%{tag}%",))
+            results.update(cursor.fetchall())
+        
+        conn.close()
+        
+        return [{"name": p[0], "description": p[1], "photo_url": p[2]} for p in results]
+
+    def get_filtered_matrices(self, place_names):
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        matrices = {}
+
+        try:
+            # Создаем множество из place_names для быстрой проверки
+            valid_places = set(place_names)
+
+            for profile in TRANSPORT_MODES.keys():
+                table_name = f"routes_matrix_{profile.replace('-', '_')}"
+                placeholders = ','.join(['?' for _ in place_names])
+                cursor.execute(f"""
+                    SELECT from_point, to_point, distance, duration 
+                    FROM {table_name}
+                    WHERE from_point IN ({placeholders})
+                    AND to_point IN ({placeholders})
+                """, place_names + place_names)
+                results = cursor.fetchall()
+                
+                matrix = {}
+                for row in results:
+                    from_point, to_point, distance, duration = row
+                    # Проверяем, что оба места находятся в списке запрошенных мест
+                    if from_point in valid_places and to_point in valid_places:
+                        if from_point not in matrix:
+                            matrix[from_point] = {}
+                        matrix[from_point][to_point] = {"distance": distance, "duration": duration}
+                
+                matrices[profile] = matrix
+
+        except Exception as e:
+            print(f"An error occurred while fetching matrices: {e}")
+
+        finally:
+            conn.close()
+
+        return matrices
+
+# Функция для получения матриц расстояний и времени
+def get_all_matrices():
+    db = LocationDatabase()
+    db.create_routes_matrices()
+    return db.get_distance_matrices()

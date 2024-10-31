@@ -1,8 +1,10 @@
 from utill.giga_api import GigaAPI
-from utill.layers_api import Layer0, Layer1, Layer2
+from utill.layers_api import Layer1, Layer2
+from utill.db_api import LocationDatabase
+import json
 
 api = GigaAPI()
-
+db = LocationDatabase()
 
 #------------Слой1
 
@@ -41,17 +43,30 @@ while True:
     if assistant_message[0:4] == "chat":
         out = assistant_message[11:-1].split(";")
         out = [x.strip().split(',') for x in out]
-        valid = layer1.validate_input(int(out[0]), out[1], out[2])
+        out[2] = [x.strip() for x in out[2]]
+        valid = layer1.validate_input(int(out[0][0]), out[1], out[2])
         if valid == True:
             break
         else:
-            history.append({"role": "system","content": valid})
+            history = [
+                {
+                "role": "system",
+                "content": promt1
+                },
+            ]
+            history.append({"role": "assistant","content": valid})
+            
 
 
 #-------------Слой2
 
 layer2 = Layer2()
-promt2 = layer2.get_promt()
+days = out[0]
+transport = out[1]
+user_tags = out[2]
+wish = out[3]
+promt2 = layer2.create_route_prompt(days, transport, user_tags, wish)
+#print(promt2)
 
 history = [
     {
@@ -59,4 +74,23 @@ history = [
       "content": promt2
     },
 ]
+
+response = api.get_simple_answer(history)
+assistant_message = response['choices'][0]["message"]['content']
+
+
+
+# Парсим JSON в Python-объект
+data = json.loads(assistant_message)
+
+# Теперь data - это список словарей Python
+# Можно обращаться к элементам, например:
+for day_info in data:
+    print(f"День {day_info['day']}:")
+    for place in day_info['route']:
+        print(f"- {place['place_name']}")
+    print(f"Общее расстояние: {day_info['total_distance_km']} км")
+    print()
+
+#--------------Слой3
 
