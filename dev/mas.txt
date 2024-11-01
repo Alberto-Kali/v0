@@ -141,3 +141,258 @@ chat next (3, ["автобус", "пешая прогулка"], ["истори�
 
 print(1 + 2)
 ```
+
+
+
+
+
+
+
+
+def process_all_layers(user_id, input_queue, output_queue):
+
+
+    #------------Слой1
+
+    
+    promt1 = layer1.get_promt()
+    history = [
+        {
+        "role": "system",
+        "content": promt1
+        },
+    ]
+    while True:
+        user_message = input_queue.get()
+        history.append({"role": "user", "content": user_message})
+        data = {
+            "mode": "instruction",
+            "messages": history
+        }
+        response = api.get_simple_answer(history)
+        assistant_message = response['choices'][0]["message"]['content']
+        history.append({"role": "assistant", "content": assistant_message})
+        if assistant_message[0:4] == "chat":
+            output_queue.put("Рассчитываю ваше расписание, это займёт примерно 4 минуты...")
+            out = assistant_message[11:-1].split(";")
+            out = [x.strip().split(',') for x in out]
+            out[2] = [x.strip() for x in out[2]]
+            valid = layer1.validate_input(int(out[0][0]), out[1], out[2])
+            if valid == True:
+                break
+            else:
+                history = [
+                    {
+                    "role": "system",
+                    "content": promt1
+                    },
+                ]
+                history.append({"role": "assistant","content": valid})
+        else:
+            output_queue.put(assistant_message)
+
+    #-------------Слой2
+    x = 0
+    while True:
+        if x > 10:
+            print("неудача")
+            return
+        print(f"попытка {x}")
+        layer2 = Layer2()
+        days = out[0]
+        transport = out[1]
+        user_tags = out[2]
+        wish = out[3]
+        promt2 = layer2.create_route_prompt(days, transport, user_tags, wish)
+        history = [
+            {
+            "role": "system",
+            "content": promt2
+            },
+        ]
+        response = api.get_simple_answer(history)
+        assistant_message = response['choices'][0]["message"]['content']
+
+        try:
+            data = json.loads(assistant_message)
+            #output_queue.put(str(data))
+            
+            z = ""
+            for day_info in data:
+                z += (f"День {day_info['day']}:\n")
+                for place in day_info['route']:
+                    z += (f"- {place['place_name']} \n")
+                z += (f"Общее расстояние: {day_info['total_distance_km']} км\n")
+                z += ("\n")
+
+            #output_queue.put(str(z))
+            days = db.find_places_from_names(data)
+            
+            break
+        except:
+            x += 1
+            pass
+
+    #--------------Слой3
+
+    layer3 = Layer3()
+
+    similar_places_by_tags = {}
+    for day_data in days:
+        day_number = day_data['day']
+        tags = []
+        for place in day_data['route']:
+            place_tags = place.get('tags', [])
+            tags.extend(place_tags)
+        #output_queue.put(str(tags))
+        try:
+            if tags:
+                similar_places = db.get_filtered_places(tags)
+                similar_places_by_tags[f"day_{day_number}"] = similar_places
+            else:
+                similar_places_by_tags[f"day_{day_number}"] = []
+        except Exception as e:
+            output_queue.put(f"Ошибка при поиске похожих мест для дня {day_number}: {str(e)}")
+            similar_places_by_tags[f"day_{day_number}"] = []
+
+    character_type = "local_enthusiast"
+
+    try:
+        prompt = layer3.create_route_optimization_prompt(days, similar_places_by_tags, character_type)
+        history = [{"role": "system", "content": prompt}]
+        response = api.get_simple_answer(history)
+
+        while True:
+            assistant_message = response['choices'][0]["message"]['content']
+            history.append({"role": "assistant", "content": assistant_message})
+            
+            if "chat done" in assistant_message.lower():
+                output_queue.put("Маршрут завершен.")
+                break
+            
+            output_queue.put(assistant_message)
+            user_input = input_queue.get()
+            history.append({"role": "user", "content": user_input})
+            
+            response = api.get_simple_answer(history)
+    except Exception as e:
+        output_queue.put(f"Произошла ошибка: {str(e)}")
+
+    output_queue.put("Cпасибо!")
+
+
+
+    import telebot
+from threading import Thread
+import queue
+import requests
+from utill.processor import Traveler
+
+traveler = Traveler()
+
+# Замените 'YOUR_BOT_TOKEN' на токен вашего бота
+bot = telebot.TeleBot('7618181412:AAHeHPLrM5bGH-s6dB9QvUyZbncSzSWNU7c')
+
+# Словарь для хранения состояния процесса и очередей для каждого пользователя
+user_processes = {}
+
+@bot.message_handler(commands=['start'])
+def handle_start_command(message):
+    user_name = message.from_user.first_name
+    welcome_text = f"""
+        Привет, {user_name}! 👋  Я твой AI-гид по Калининградской области.
+
+        Я могу помочь тебе составить тур по Калининграду и области на основе твоих предпочтений.
+
+        Для составления тура напиши /составить_тур
+        Также ты ты можешь выбрать собеседника который поможет составить тебе тур командой
+        /настройки
+
+        С этого момента с тобой будет общаться нейросеть. Если тебя не устраивает вариант отдыха на конкретный день, то ответь на это сообщение словом “измени”. Когда тебя устроит сделанный тур или ты захочешь прекратить общение с ботом, напиши “конец”.
+
+        Расскажи, на сколько дней ты планируешь приехать в наш замечательный край, и какие места тебя интересуют? 
+        Чем больше ты расскажешь о своих интересах, тем точнее я смогу подобрать для тебя маршрут и интересные места для посещения!
+
+    """
+    
+    try:
+        photo = open('prev.jpg', 'rb')
+        bot.send_photo(message.chat.id, photo, caption=welcome_text)
+    except Exception as e:
+        print(f"Ошибка при отправке изображения: {str(e)}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отправке изображения.")
+
+
+@bot.message_handler(commands=['neuro'])
+def handle_neuro_command(message):
+    user_id = message.from_user.id
+    
+    # Если процесс уже запущен, останавливаем его
+    if user_id in user_processes:
+        user_processes[user_id]['active'] = False
+        #bot.reply_to(message, "Перезапуск нейросети...")
+    
+    # Создаем очереди для обмена данными между ботом и процессом
+    input_queue = queue.Queue()
+    output_queue = queue.Queue()
+    
+    # Создаем отдельный поток для процесса
+    def run_process():
+        try:
+            traveler.process_all_layers(user_id, input_queue, output_queue)
+        except Exception as e:
+            bot.send_message(user_id, f"Произошла ошибка: {str(e)}")
+        finally:
+            if user_id in user_processes:
+                del user_processes[user_id]
+
+    # Создаем и запускаем новый поток
+    process_thread = Thread(target=run_process)
+    process_thread.start()
+    
+    # Сохраняем информацию о процессе
+    user_processes[user_id] = {
+        'thread': process_thread,
+        'input_queue': input_queue,
+        'output_queue': output_queue,
+        'active': True
+    }
+    
+    #bot.reply_to(message, "С этого момента вы общаетесь с нейросетью!")
+
+    # Запускаем обработку вывода в отдельном потоке
+    Thread(target=handle_output, args=(user_id,)).start()
+    user_id = message.from_user.id
+    if user_id in user_processes and user_processes[user_id]['active']:
+        user_processes[user_id]['input_queue'].put("Привет")
+    else:
+        bot.reply_to(message, "Используйте /neuro для составления, или /settings для настроек")
+
+def handle_output(user_id):
+    while user_id in user_processes and user_processes[user_id]['active']:
+        try:
+            output = user_processes[user_id]['output_queue'].get(timeout=1)
+            bot.send_message(user_id, output)
+        except queue.Empty:
+            pass
+
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    user_id = message.from_user.id
+    if user_id in user_processes and user_processes[user_id]['active']:
+        user_processes[user_id]['input_queue'].put(message.text)
+    else:
+        bot.reply_to(message, "Используйте /neuro для составления, или /settings для настроек")
+
+
+def run_bot():
+    while True:
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            print(f"Произошла ошибка при работе бота: {str(e)}")
+            print("Перезапуск бота через 3 секунд...")
+            time.sleep(3)
+
+if __name__ == '__main__':
+    run_bot()

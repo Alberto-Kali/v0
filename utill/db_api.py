@@ -236,6 +236,64 @@ class LocationDatabase:
             for day in days:
                 updated_route = []
                 for place in day['route']:
+                    if isinstance(place, dict) and 'place_name' in place:
+                        place_name = place['place_name']
+                    elif isinstance(place, str):
+                        place_name = place
+                    else:
+                        print(f"Warning: Unexpected place format: {place}")
+                        continue
+
+                    cursor.execute("""
+                        SELECT id, name, description, photo_link, longitude, latitude, tags
+                        FROM places
+                        WHERE name = ?
+                    """, (place_name,))
+                    result = cursor.fetchone()
+
+                    if result:
+                        updated_place = {
+                            "place_id": result[0],
+                            "place_name": result[1],
+                            "description": result[2],
+                            "photo_link": result[3],
+                            "coordinates": {
+                                "longitude": result[4],
+                                "latitude": result[5]
+                            },
+                            "tags": result[6].split(',') if result[6] else []
+                        }
+                        updated_route.append(updated_place)
+                    else:
+                        print(f"Warning: Place '{place_name}' not found in the database.")
+                        if isinstance(place, dict):
+                            updated_route.append(place)
+                        else:
+                            updated_route.append({"place_name": place_name})
+
+                updated_day = day.copy()
+                updated_day['route'] = updated_route
+                updated_days.append(updated_day)
+
+        except Exception as e:
+            print(f"An error occurred while finding places: {e}")
+
+        finally:
+            conn.close()
+
+        return updated_days
+
+
+    def find_places_from_names_auto(self, days):
+        conn = self.connect_db()
+        cursor = conn.cursor()
+
+        updated_days = []
+
+        try:
+            for day in days:
+                updated_route = []
+                for place in day['route']:
                     place_name = place['place_name']
                     cursor.execute("""
                         SELECT id, name, description, photo_link, longitude, latitude, tags
