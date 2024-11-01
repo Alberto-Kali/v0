@@ -169,7 +169,7 @@ def callback_handler(call):
                     user_data[user_id]['interests'].append(interest)
                 
                 markup = types.InlineKeyboardMarkup()
-                interest_options = ["История", "Природа", "Наука", "Архитектура", " Искусство", "Спорт"]
+                interest_options = ["История", "Природа", "Наука", "Архитектура", "Искусство", "Спорт"]
                 for option in interest_options:
                     markup.add(types.InlineKeyboardButton(
                         f"✓ {option}" if option.lower() in user_data[user_id]['interests'] else option,
@@ -199,6 +199,11 @@ def handle_all_messages(message):
         if user_data[user_id]['step'] == 'wishes':
             user_data[user_id]['wishes'] = message.text
             
+            if user_data[user_id]['is_local']:
+                user_data[user_id]['wishes'] += " Пользователь является местным жителем, поэтому его сложно удивить стандартными местами."
+            else:
+                user_data[user_id]['wishes'] += " Пользователь является туристом, поэтому его нужно отправлять в самые популярные места."
+            
             summary = f"📋 Результаты опроса:\n\n" \
                      f"🕒 Длительность: {user_data[user_id]['duration']} дней\n" \
                      f"🚗 Транспорт: {', '.join(user_data[user_id]['transport'])}\n" \
@@ -210,10 +215,13 @@ def handle_all_messages(message):
                 message.chat.id,
                 user_data[user_id]['survey_message_id']
             )
-            
-            processing_message = bot.send_message(
+            markup = ReplyKeyboardMarkup(resize_keyboard=True)
+            markup.add(KeyboardButton("Время для финального ответа"))
+            markup.add(KeyboardButton("Перезапуск"))
+            processing_message = bot .send_message(
                 message.chat.id,
-                "⏳ Ваш запрос обрабатывается...\nЭто может занять несколько минут."
+                "⏳ Ваш запрос обрабатывается...\nЭто может занять несколько минут.",
+                reply_markup=markup
             )
             
             out = [
@@ -227,9 +235,6 @@ def handle_all_messages(message):
                 print(out)
                 start_neuro_process(message, out)
                 user_data[user_id]['step'] = 'chat'
-                markup = ReplyKeyboardMarkup(resize_keyboard=True)
-                markup.add(KeyboardButton("Время для финального ответа"))
-                markup.add(KeyboardButton("Перезапуск"))
                 #bot.send_message(message.chat.id, "Используйте кнопки для управления:", reply_markup=markup)
             except Exception as e:
                 bot.send_message(message.chat.id, f"Произошла ошибка при составлении тура: {str(e)}")
@@ -267,7 +272,7 @@ def start_neuro_process(message, out):
     
     def run_process():
         try:
-            traveler.process_only_corrector(traveler.process_only_router(out, user_id, input_queue, output_queue), user_id, input_queue, output_queue)
+            traveler.process_only_corrector(traveler.process_only_router(out, user_id, input_queue, output_queue), user_id, out[3], input_queue, output_queue)
         except Exception as e:
             bot.send_message(user_id, f"Произошла ошибка: {str(e)}")
         finally:

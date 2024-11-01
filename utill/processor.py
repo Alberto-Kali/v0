@@ -107,7 +107,7 @@ class Traveler():
 
     import json
 
-    def corrector(self, user_id, input_queue, output_queue):
+    def corrector(self, user_id, wish, input_queue, output_queue):
         character_type = "local_enthusiast"
         layer = Layer3()
         data, days = self.routerOUT
@@ -129,7 +129,7 @@ class Traveler():
                 similar_places_by_tags[f"day_{day_number}"] = []
 
         try:
-            prompt = layer.create_route_optimization_prompt(days, similar_places_by_tags, character_type)
+            prompt = layer.create_route_optimization_prompt(days, similar_places_by_tags, wish, character_type)
             history = [{"role": "system", "content": prompt}]
             response = api.get_simple_answer(history)
 
@@ -139,36 +139,36 @@ class Traveler():
                 
                 if "chat done" in assistant_message.lower():
                     self.finalRoute = assistant_message
-                    print(assistant_message)
-                    try:
-                        # Находим начало JSON в сообщении
-                        json_start = assistant_message.find('[')
-                        if json_start == -1:
-                            raise ValueError("JSON не найден в ответе")
-                        
-                        json_str = assistant_message[json_start:]
-                        data = json.loads(json_str)
-                        
-                        # Проверяем формат данных
-                        if not isinstance(data, list) or not all(isinstance(day, dict) for day in data):
-                            raise ValueError("Неверный формат данных")
-                        
-                        z = ""
-                        for day_info in data:
-                            z += f"День {day_info['day']}:\n"
-                            for place in day_info['route']:
-                                z += f"- {place['place_name']} \n"
-                            z += f"Общее расстояние: {day_info['total_distance_km']} км\n\n"
+                    #print(assistant_message)
+                    #try:
+                    #    # Находим начало JSON в сообщении
+                    #    json_start = assistant_message.find('[')
+                    #    if json_start == -1:
+                    #        raise ValueError("JSON не найден в ответе")
+                    #    
+                    #    json_str = assistant_message[json_start:]
+                    #    data = json.loads(json_str)
+                    #    
+                    #    # Проверяем формат данных
+                    #    if not isinstance(data, list) or not all(isinstance(day, dict) for day in data):
+                    #        raise ValueError("Неверный формат данных")
+                    #    
+                    #    z = ""
+                    #    for day_info in data:
+                    #        z += f"День {day_info['day']}:\n"
+                    #        for place in day_info['route']:
+                    #            z += f"- {place['place_name']} \n"
+                    #        z += f"Общее расстояние: {day_info['total_distance_km']} км\n\n"
 
-                    except json.JSONDecodeError as e:
-                        print(f"Ошибка при разборе JSON: {str(e)}")
-                        output_queue.put("К сожалению пока что наш код может распознать не все выводы нейросети, но скоро мы это исправим :)")
-                    except Exception as e:
-                        print(f"Ошибка при обработке ответа: {str(e)}")
-                        output_queue.put("К сожалению пока что наш код может распознать не все выводы нейросети, но скоро мы это исправим :)")
-                    else:
-                        output_queue.put("Ваш маршрут: \n" + z)
-                        output_queue.put("Маршрут завершен.")
+                    #except json.JSONDecodeError as e:
+                    #    print(f"Ошибка при разборе JSON: {str(e)}")
+                    #    output_queue.put("К сожалению пока что наш код может распознать не все выводы нейросети, но скоро мы это исправим :)")
+                    #except Exception as e:
+                    #    print(f"Ошибка при обработке ответа: {str(e)}")
+                    #    output_queue.put("К сожалению пока что наш код может распознать не все выводы нейросети, но скоро мы это исправим :)")
+                    #else:
+                        #output_queue.put("Ваш маршрут: \n" + z)
+                    output_queue.put("Маршрут завершен.")
                     break
                 
                 output_queue.put(assistant_message)
@@ -195,7 +195,7 @@ class Traveler():
         self.router(user_id, input_queue, output_queue)
         return self.routerOUT
 
-    def process_only_corrector(self, routerOUT, user_id, input_queue, output_queue):
+    def process_only_corrector(self, routerOUT, user_id, wish, input_queue, output_queue):
         self.routerOUT = routerOUT
-        self.corrector(user_id, input_queue, output_queue)
+        self.corrector(user_id, wish, input_queue, output_queue)
         return self.correctorOUT
